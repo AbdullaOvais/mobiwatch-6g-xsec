@@ -1,0 +1,4 @@
+[console_scripts]
+dms_cli = xapp_onboarder.server.cli:run
+xapp_onboarder = xapp_onboarder.server.server:main
+
