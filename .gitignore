@@ -1,0 +1,68 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Virtual Environments
+# =========================
+mobiwatch_env/
+venv/
+env/
+.venv/
+
+# =========================
+# PyTorch / Model Files
+# =========================
+*.pth
+*.pt
+*.ckpt
+
+# =========================
+# Dataset (DO NOT TRACK LARGE FILES)
+# =========================
+dataset/
+data/
+
+# If you want to keep folder but ignore content:
+# dataset/*
+# !dataset/README.md
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Plots / Generated Images
+# =========================
+*.png
+*.jpg
+*.jpeg
+validation.png
+test.png
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Optuna / Experiment Tracking
+# =========================
+*.db
+optuna_studies/
