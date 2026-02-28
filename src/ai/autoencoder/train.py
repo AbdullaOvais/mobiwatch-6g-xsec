@@ -1,156 +1,163 @@
-import pandas as pd
 import os
+import argparse
+import random
 import numpy as np
+import pandas as pd
 from sklearn.model_selection import train_test_split
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
+
 from .model import Autoencoder
 from .encoder import Encoder
 
-train_dataset = "5g-mobiwatch"
-train_label = "benign"
-delimeter = ";"
 
-# # Step 1: Load and preprocess data
-# data_folder = "../../../dataset/mobiflow"
-# df = pd.read_csv(f'{data_folder}/{train_dataset}_{train_label}_mobiflow.csv', header=0, delimiter=delimeter)
-# # Handle missing values
-# # df = pd.read_csv(
-# #     os.path.join(data_folder, f"{train_dataset}_{train_label}_mobiflow.csv"),
-# #     header=0,
-# #     delimiter=";"
-# # )
-BASE_DIR = os.path.dirname(__file__)   # src/ai/autoencoder
+# ==========================================================
+# Argument Parser
+# ==========================================================
+parser = argparse.ArgumentParser()
 
+parser.add_argument("--seq_len", type=int, default=6)
+parser.add_argument("--hidden_dim", type=int, default=64)
+parser.add_argument("--latent_dim", type=int, default=16)
+parser.add_argument("--architecture", type=str, default="kitsune")
+parser.add_argument("--lr", type=float, default=0.001)
+parser.add_argument("--batch_size", type=int, default=64)
+parser.add_argument("--epochs", type=int, default=500)
+parser.add_argument("--percentile", type=int, default=99)
+parser.add_argument("--seed", type=int, default=42)
+
+args = parser.parse_args()
+
+
+torch.manual_seed(args.seed)
+np.random.seed(args.seed)
+random.seed(args.seed)
+
+
+BASE_DIR = os.path.dirname(__file__)
 data_folder = os.path.join(BASE_DIR, "5g-mobiwatch")
 
 csv_path = os.path.join(
     data_folder,
-    f"{train_dataset}_{train_label}_mobiflow.csv"
+    "5g-mobiwatch_benign_mobiflow.csv"
 )
 
 print("Loading dataset from:", csv_path)
 
-df = pd.read_csv(csv_path, header=0, delimiter=";")
+df = pd.read_csv(csv_path, delimiter=";")
 df.fillna(0, inplace=True)
 
-sequence_length = 6
+
 encoder = Encoder()
-X_sequences = encoder.encode_mobiflow(df, sequence_length)
-print(X_sequences.shape)
+X_sequences = encoder.encode_mobiflow(df, args.seq_len)
 
-# Split data into training and test sets
-seed = 2 # 42
-indices = np.arange(X_sequences.shape[0])
-val_portion = 0.2 # size of validation set
-X_train, X_test, indices_train, indices_test = train_test_split(X_sequences, indices, test_size=val_portion, random_state=seed)
+print("Encoded shape:", X_sequences.shape)
 
-# Convert to PyTorch tensors
+
+X_train, X_val = train_test_split(
+    X_sequences,
+    test_size=0.2,
+    random_state=args.seed
+)
+
 X_train = torch.tensor(X_train, dtype=torch.float32)
-X_test = torch.tensor(X_test, dtype=torch.float32)
+X_val = torch.tensor(X_val, dtype=torch.float32)
 
-# Create DataLoader for training
-train_dataset = TensorDataset(X_train, X_train)
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+train_loader = DataLoader(
+    TensorDataset(X_train, X_train),
+    batch_size=args.batch_size,
+    shuffle=True
+)
 
-# Define the Autoencoder model
+
 input_dim = X_train.shape[1]
-model = Autoencoder(input_dim)
 
-# Compile and train the model
+model = Autoencoder(
+    input_dim=input_dim,
+    hidden_dim=args.hidden_dim,
+    latent_dim=args.latent_dim,
+    architecture=args.architecture
+)
+
 criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
-num_epochs = 500
-for epoch in range(num_epochs):
-    for data in train_loader:
-        inputs, _ = data
-        outputs = model(inputs)
-        loss = criterion(outputs, inputs)
-        
+
+best_val_loss = float("inf")
+patience = 20
+counter = 0
+
+os.makedirs("models", exist_ok=True)
+
+print("\nStarting training...\n")
+
+for epoch in range(args.epochs):
+
+    model.train()
+    train_loss = 0
+
+    for batch in train_loader:
+        x, _ = batch
+        output = model(x)
+        loss = criterion(output, x)
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
-    if (epoch+1) % 10 == 0:
-        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.6f}')
 
-# Save the model
-os.makedirs("./data", exist_ok=True) # this line I added
-model_path = "./data/autoencoder_model.pth"
+        train_loss += loss.item()
 
-with torch.no_grad():
-    reconstructions = model(X_train)
-    reconstruction_error = torch.mean((X_train - reconstructions) ** 2, dim=1)
-    percentile = 99
-    threshold = np.percentile(reconstruction_error.numpy(), percentile) # we assume the training set contains X% anomalous data
-    # alternative: (1) use maximum reconstruction error (2) take average
+    train_loss /= len(train_loader)
 
-torch.save({'model': model, "threshold": threshold}, model_path)
-print(f"Model saved to {model_path}")
+    model.eval()
+    with torch.no_grad():
+        val_output = model(X_val)
+        val_loss = criterion(val_output, X_val)
 
-# Detect anomalies
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        counter = 0
+        torch.save(model.state_dict(), "models/best_val_loss.pt")
+    else:
+        counter += 1
+
+    if counter >= patience:
+        print("Early stopping triggered")
+        break
+
+    if (epoch + 1) % 10 == 0:
+        print(f"Epoch {epoch+1}: Train {train_loss:.6f} | Val {val_loss:.6f}")
+
+
+model.load_state_dict(torch.load("models/best_val_loss.pt", weights_only=False))
 model.eval()
 
+
 with torch.no_grad():
-    reconstructions = model(X_test)
-    reconstruction_error = torch.mean((X_test - reconstructions) ** 2, dim=1)
+    recon = model(X_train)
+    train_error = torch.mean((X_train - recon) ** 2, dim=1)
 
-anomalies = reconstruction_error > threshold
+threshold = np.percentile(train_error.cpu().numpy(), args.percentile)
 
-# Convert back to DataFrame
-if len(anomalies) > 0:
-    for anomalies_idx in torch.nonzero(anomalies).squeeze():
-        df_idx = indices_test[anomalies_idx]
-        sequence_data = df.loc[df_idx:df_idx + sequence_length - 1]
-        df_sequence = pd.DataFrame(sequence_data, columns=encoder.identifier_features + encoder.numerical_features + encoder.categorical_features)
-        print(df_sequence)
-        print()
+print("Threshold selected:", threshold)
 
-# plot graph - reconstruction err w.r.t. to each sequence
-plot = True
-if plot:
-    import matplotlib.pyplot as plt
-    # Creating a simple line chart
-    plt.figure(figsize=(10, 5))
-    plt.plot(reconstruction_error, marker='o', linestyle='-', color='b')  # Plotting the line chart
-    plt.axhline(y=threshold, color='r', linestyle='-') # threshold
-    plt.title(f'AutoEncoder Reconstruction Error (Threshold: {threshold})')  # Title of the chart
-    plt.title('AutoEncoder Reconstruction Error')  # Title of the chart
-    plt.xlabel('Seq Index')  # X-axis label
-    plt.ylabel('AE Error')  # Y-axis label
-    plt.grid(True)  # Adding a grid
-    plt.savefig("validation.png")  # Display the plot
 
-# Output the anomalies
-# anomalous_data = X_test[anomalies]
+model_path = (
+    f"models/AE_seq{args.seq_len}"
+    f"_lat{args.latent_dim}"
+    f"_hid{args.hidden_dim}"
+    f"_lr{args.lr}"
+    f"_p{args.percentile}.pt"
+)
 
-# # Convert anomalous_data back to original form
-# anomalous_data_numpy = anomalous_data.numpy()
+torch.save({
+    "model_state_dict": model.state_dict(),
+    "threshold": threshold,
+    "config": vars(args)
+}, model_path)
 
-# # Reshape anomalous data back to original sequence shape
-# num_features_per_line = len(numerical_features) + encoded_identifiers.shape[1] // len(identifier_features) + len(encoder.categories_[0])
-# anomalous_data_reshaped = anomalous_data_numpy.reshape(-1, sequence_length, num_features_per_line)
-
-# # Inverse transform numerical features
-# anomalous_data_num = scaler.inverse_transform(anomalous_data_reshaped[:, :, :len(numerical_features)].reshape(-1, len(numerical_features)))
-
-# # Inverse transform categorical features
-# anomalous_data_cat = encoder.inverse_transform(anomalous_data_reshaped[:, :, len(numerical_features):].reshape(-1, len(encoder.categories_[0])))
-
-# # Combine numerical and categorical features
-# anomalous_data_combined = np.hstack([anomalous_data_num, anomalous_data_cat])
-
-# # Convert back to DataFrame
-# anomalous_data_list = []
-# for i in range(0, anomalous_data_combined.shape[0], sequence_length):
-#     sequence_data = anomalous_data_combined[i:i + sequence_length]
-#     df_sequence = pd.DataFrame(sequence_data, columns=numerical_features + categorical_features)
-#     anomalous_data_list.append(df_sequence)
-
-# print("Anomalous data points in original form:")
-# for anomalous_sequence in anomalous_data_list:
-#     print(anomalous_sequence)
-#     print()
+print("Model saved to:", model_path)
+print("Training complete.\n")

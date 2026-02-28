@@ -1,212 +1,80 @@
+import argparse
 import pandas as pd
 import os
 import numpy as np
 import torch
-import torch.nn as nn
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
 from .model import Autoencoder
 from .encoder import Encoder
 
-# Data Preparation
-# train_dataset = "5g-mobiwatch"
-# train_label = "benign"
 
-test_dataset = "5g-mobiwatch"
-test_label = "abnormal"
+def main():
 
-delimeter = ";"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_path", type=str, required=True)
+    parser.add_argument("--label", type=str, default="combined")
+    args = parser.parse_args()
 
-# # Step 1: Load and preprocess data
-# data_folder = "../../../dataset/mobiflow"
-# df = pd.read_csv(f'{data_folder}/{test_dataset}_{test_label}_mobiflow.csv', header=0, delimiter=delimeter)
-# # Handle missing values
-# this is am adding
-BASE_DIR = os.path.dirname(__file__)   # src/ai/autoencoder
+    checkpoint = torch.load(args.model_path, weights_only=False)
+    config = checkpoint["config"]
+    threshold = checkpoint["threshold"]
 
-data_folder = os.path.join(BASE_DIR, "5g-mobiwatch")
+    BASE_DIR = os.path.dirname(__file__)
+    data_folder = os.path.join(BASE_DIR, "5g-mobiwatch")
 
-csv_path = os.path.join(
-    data_folder,
-    f"{test_dataset}_{test_label}_mobiflow.csv"
-)
+    encoder = Encoder()
 
-print("Loading dataset from:", csv_path)
+    def load_dataset(label):
+        csv_path = os.path.join(
+            data_folder,
+            f"5g-mobiwatch_{label}_mobiflow.csv"
+        )
+        df = pd.read_csv(csv_path, delimiter=";")
+        df.fillna(0, inplace=True)
+        X = encoder.encode_mobiflow(df, config["seq_len"])
+        return torch.tensor(X, dtype=torch.float32)
 
-df = pd.read_csv(csv_path, header=0, delimiter=";")
-df.fillna(0, inplace=True)
+    if args.label == "combined":
+        X_benign = load_dataset("benign")
+        X_abnormal = load_dataset("abnormal")
 
-sequence_length = 6
-encoder = Encoder()
-X_sequences = encoder.encode_mobiflow(df, sequence_length)
-
-# Convert to PyTorch tensors
-X_test = torch.tensor(X_sequences, dtype=torch.float32)
-
-# Load the saved model
-input_dim = X_test.shape[1]  # This should match the input_dim used during training
-model_path = "./data/autoencoder_model.pth"
-
-model = Autoencoder(input_dim)
-# model = torch.load(model_path)['model'] here I added these 3 lines below to it
-checkpoint = torch.load(model_path, weights_only=False)
-model = checkpoint['model']
-threshold = checkpoint['threshold']
-model.eval()
-print(f"Model loaded from {model_path}")
-
-# Detect anomalies
-with torch.no_grad():
-    reconstructions = model(X_test)
-    reconstruction_error = torch.mean((X_test - reconstructions) ** 2, dim=1)
-
-# threshold = torch.load(model_path)['threshold']
-anomalies = reconstruction_error > threshold
-
-# ground truth
-gt = {"blind dos": [10, 21, 32], 
-      "downlink dos": [38],
-      "downlink imsi extr": [102],
-      "uplink imsi extr": list(range(42, 47)),
-      "uplink dos": [71, 72],
-      "bts ddos": list(range(52, 64))+list(range(88, 97))+list(range(107, 125)),
-      "null cipher": list(range(82, 84))
-      }
-
-fn = [v for k in gt.keys() for v in gt[k] ]
-fp = []
-
-# Convert back to DataFrame
-for anomalies_idx in torch.nonzero(anomalies).squeeze():
-    df_idx = anomalies_idx
-    sequence_data = df.loc[df_idx:df_idx + sequence_length - 1]
-    df_sequence = pd.DataFrame(sequence_data, columns=encoder.identifier_features + encoder.numerical_features + encoder.categorical_features)
-    print(df_sequence)
-
-    # evaluation with ground truth
-    attack_found = False
-    for attack in gt.keys():
-        for attack_idx in gt[attack]:
-            if anomalies_idx <= attack_idx < anomalies_idx + sequence_length:
-                attack_found = True
-                if attack_idx in fn:
-                    fn.remove(attack_idx) 
-        if attack_found:
-            break
-    
-    if attack_found:
-        print(f"Attack: {attack}")
+        X_test = torch.cat([X_benign, X_abnormal], dim=0)
+        y_true = np.concatenate([
+            np.zeros(len(X_benign)),
+            np.ones(len(X_abnormal))
+        ])
     else:
-        print(f"False Positive")
-        fp.append(anomalies_idx)
+        X_test = load_dataset(args.label)
+        y_true = np.ones(len(X_test)) if args.label == "abnormal" else np.zeros(len(X_test))
 
-    print()
+    model = Autoencoder(
+        input_dim=X_test.shape[1],
+        hidden_dim=config["hidden_dim"],
+        latent_dim=config["latent_dim"],
+        architecture=config["architecture"]
+    )
 
-print("FN:")
-print(fn)
-print("FP:")
-print(fp)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
 
-# plot graph - reconstruction err w.r.t. to each sequence
-plot = True
-if plot:
-    import matplotlib.pyplot as plt
-    # Creating a simple line chart
-    plt.figure(figsize=(10, 5))
-    plt.plot(reconstruction_error, marker='o', linestyle='-', color='b')  # Plotting the line chart
-    plt.axhline(y=threshold, color='r', linestyle='-') # threshold
-    plt.title(f'AutoEncoder Reconstruction Error (Threshold: {threshold})')  # Title of the chart
-    plt.xlabel('Seq Index')  # X-axis label
-    plt.ylabel('AE Error')  # Y-axis label
-    plt.grid(True)  # Adding a grid
-    plt.savefig("test.png")  # Display the plot
+    with torch.no_grad():
+        recon = model(X_test)
+        error = torch.mean((X_test - recon) ** 2, dim=1)
 
+    y_pred = (error > threshold).int().numpy()
 
-# combine and print anmolous sequences
-indices = torch.nonzero(anomalies).squeeze().tolist()
-combined_ranges = []
+    accuracy = accuracy_score(y_true, y_pred)
+    precision = precision_score(y_true, y_pred, zero_division=0)
+    recall = recall_score(y_true, y_pred, zero_division=0)
+    f1 = f1_score(y_true, y_pred, zero_division=0)
 
-start = end = indices[0]
-
-for idx in indices[1:]:
-    if idx == end + 1:
-        end = idx
-    else:
-        combined_ranges.append([start, end])
-        start = end = idx
-
-combined_ranges.append([start, end])
-# print_features = ["rnti", "tmsi", "imsi", "msg", "cipher_alg", "int_alg", "est_cause"]
-print_features = ["rnti", "tmsi", "msg"]
-print("\n\n=====================================\n\n")
-df = df.replace('Securitymodecommand', 'NAS_Securitymodecommand')
-df = df.replace('Securitymodecomplete', 'NAS_Securitymodecomplete')
-df = df.replace('SecurityModeCommand', 'RRC_SecurityModeCommand')
-df = df.replace('SecurityModeComplete', 'RRC_SecurityModeComplete')
-for r in combined_ranges:
-    start = r[0]
-    end = r[1]
-    sequence_data = df.loc[start-sequence_length:end+sequence_length+1]
-    df_sequence = pd.DataFrame(sequence_data, columns=print_features)
-    print(df_sequence.to_string(index=False))
-    print()
+    print("\n===== METRICS =====")
+    print("Accuracy :", accuracy)
+    print("Precision:", precision)
+    print("Recall   :", recall)
+    print("F1 Score :", f1)
 
 
-# for anomalies_idx in torch.nonzero(anomalies).squeeze():
-#     df_idx = anomalies_idx
-#     sequence_data = df.loc[df_idx:df_idx + sequence_length - 1]
-#     df_sequence = pd.DataFrame(sequence_data, columns=encoder.identifier_features + encoder.numerical_features + encoder.categorical_features)
-#     print(df_sequence)
-
-# Output the anomalies
-# anomalous_data = X_test[anomalies]
-
-# # Convert anomalous_data back to original form
-# anomalous_data_numpy = anomalous_data.numpy()
-
-# # Reshape anomalous data back to original sequence shape
-# num_features_per_line = len(numerical_features) + len(encoder.categories_[0])
-# anomalous_data_reshaped = anomalous_data_numpy.reshape(-1, sequence_length, num_features_per_line)
-
-# # Inverse transform numerical features
-# anomalous_data_num = scaler.inverse_transform(anomalous_data_reshaped[:, :, :len(numerical_features)].reshape(-1, len(numerical_features)))
-
-# # Inverse transform categorical features
-# anomalous_data_cat = encoder.inverse_transform(anomalous_data_reshaped[:, :, len(numerical_features):].reshape(-1, len(encoder.categories_[0])))
-
-# # Combine numerical and categorical features
-# anomalous_data_combined = np.hstack([anomalous_data_num, anomalous_data_cat])
-
-# # Convert back to DataFrame
-# anomalous_data_list = []
-# for i in range(0, anomalous_data_combined.shape[0], sequence_length):
-#     sequence_data = anomalous_data_combined[i:i + sequence_length]
-#     df_sequence = pd.DataFrame(sequence_data, columns=numerical_features + categorical_features)
-#     anomalous_data_list.append(df_sequence)
-
-# print("Anomalous data points in original form:")
-# for anomalous_sequence in anomalous_data_list:
-#     print(anomalous_sequence)
-#     print()
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-
-# ground truth vector
-# Build correct sequence-level ground truth
-y_true = np.zeros(len(X_sequences))
-
-all_attack_indices = [v for k in gt.keys() for v in gt[k]]
-
-for seq_idx in range(len(X_sequences)):
-    start = seq_idx
-    end = seq_idx + sequence_length - 1
-    
-    for attack_idx in all_attack_indices:
-        if start <= attack_idx <= end:
-            y_true[seq_idx] = 1
-            break
-
-y_pred = anomalies.cpu().numpy().astype(int)
-
-print("\n===== METRICS =====")
-print("Accuracy :", accuracy_score(y_true, y_pred))
-print("Precision:", precision_score(y_true, y_pred))
-print("Recall   :", recall_score(y_true, y_pred))
-print("F1 Score :", f1_score(y_true, y_pred))
+if __name__ == "__main__":
+    main()
