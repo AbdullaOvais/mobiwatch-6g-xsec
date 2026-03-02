@@ -4,10 +4,11 @@ import torch
 from sklearn.model_selection import train_test_split
 from lstm_multivariate import train, test, test_from_iter
 from utils import validate_by_rmse, Normalizer
-from .encoder import Encoder
+from encoder import Encoder
 from torch.utils.data import DataLoader, TensorDataset
 import sys
 import more_itertools
+import pickle
 
 # training dataset
 train_dataset = "5g-mobiwatch"
@@ -20,7 +21,7 @@ df = pd.read_csv(f'{data_folder}/{train_dataset}_{train_label}_mobiflow.csv', he
 # Handle missing values
 df.fillna(0, inplace=True)
 
-sequence_length = 5 # use X to predict next
+sequence_length = 10 # use X to predict next
 encoder = Encoder()
 X_sequences = encoder.encode_mobiflow(df, sequence_length+1)
 print(X_sequences.shape)
@@ -35,6 +36,20 @@ for i in range(len(X_sequences)):
 x_train = np.asarray(x_train)
 y_train = np.asarray(y_train)
 print(x_train.shape, y_train.shape)
+
+# ======================
+# Normalization
+# ======================
+normer = Normalizer(x_train.shape[-1], online_minmax=True)
+
+x_train_reshaped = x_train.reshape(-1, x_train.shape[-1])
+x_train_reshaped = normer.fit_transform(x_train_reshaped)
+x_train = x_train_reshaped.reshape(x_train.shape)
+
+y_train = normer.transform(y_train)
+
+
+pickle.dump(normer, open("save/normer.pkl", "wb"))
 
 seed = 2
 val_portion = 0.1 # size of validation set
@@ -82,42 +97,79 @@ torch.save({'net':model,'thres':thres},f'./save/lstm_multivariate_{train_dataset
 
 # validation
 rmse_vec = test(model, thres, x_val, y_val)
-anomalies = torch.tensor(rmse_vec > thres)
+anomalies = (rmse_vec > thres).detach().cpu()
 if len(anomalies) > 0:
     for anomalies_idx in torch.nonzero(anomalies).squeeze():
-        df_idx = anomalies_idx
+        df_idx = anomalies_idx.item()
         sequence_data = df.loc[df_idx:df_idx + sequence_length]
         df_sequence = pd.DataFrame(sequence_data, columns=encoder.identifier_features + encoder.numerical_features + encoder.categorical_features)
         print(df_sequence)
         print()
     
-    FP = len(torch.nonzero(anomalies).squeeze())
-    FN = 0
-    TP = 0
-    TN = x_val.shape[0] - FP
-    # Compute precision, recall and F1-measure
-    acc = 100 * (TP + TN) / (TP + TN + FP + FN)
-    # P = 100 * TP / (TP + FP)
-    # R = 100 * TP / (TP + FN)
-    # F1 = 2 * P * R / (P + R)
-    fpr = 100 * FP / (FP + TN)
-    # tpr = 100 * TP / (TP + FN)
-    # print('false positive (FP): {}, false negative (FN): {}, Acc: {:.3f}%, Precision: {:.3f}%, Recall: {:.3f}%, F1-measure: {:.3f}%'.format(FP, FN, acc, P, R, F1))
-    print('false positive (FP): {}, false negative (FN): {}, Acc: {:.3f}%'.format(FP, FN, acc))
-    print('false positive rate: {:.3f}%'.format(fpr))
+# ==========================
+# Proper Window-Level Metrics
+# ==========================
+
+# pred_labels = anomalies.detach().cpu().numpy().astype(int)
+# true_labels = np.zeros(len(pred_labels))
+
+# for attack in gt.values():
+#     for idx in attack:
+#         if idx < len(true_labels):
+#             true_labels[idx] = 1
+
+# TP = ((pred_labels == 1) & (true_labels == 1)).sum()
+# TN = ((pred_labels == 0) & (true_labels == 0)).sum()
+# FP = ((pred_labels == 1) & (true_labels == 0)).sum()
+# FN = ((pred_labels == 0) & (true_labels == 1)).sum()
+
+# acc = 100 * (TP + TN) / (TP + TN + FP + FN)
+# precision = 100 * TP / (TP + FP) if (TP + FP) > 0 else 0
+# recall = 100 * TP / (TP + FN) if (TP + FN) > 0 else 0
+# f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+# fpr = 100 * FP / (FP + TN) if (FP + TN) > 0 else 0
+
+# print(f"TP: {TP}, TN: {TN}, FP: {FP}, FN: {FN}")
+# print(f"Accuracy: {acc:.3f}%")
+# print(f"Precision: {precision:.3f}%")
+# print(f"Recall: {recall:.3f}%")
+# print(f"F1-score: {f1:.3f}%")
+# print(f"False Positive Rate: {fpr:.3f}%")
+# ==========================
+# Validation Metrics (Benign Only)
+# ==========================
+
+anomalies = (rmse_vec > thres).detach().cpu()
+
+FP = anomalies.sum().item()
+TN = len(anomalies) - FP
+
+fpr = 100 * FP / (FP + TN)
+
+print(f"Validation False Positives: {FP}")
+print(f"Validation True Negatives: {TN}")
+print(f"Validation FPR: {fpr:.3f}%")
 
 plot = True
 if plot:
     import matplotlib.pyplot as plt
+
+    # Add these two lines to pull the data off the GPU
+    rmse_plot = rmse_vec.cpu().detach().numpy()
+    thres_plot = thres.cpu().detach().item()
+
     # Creating a simple line chart
     plt.figure(figsize=(10, 5))
-    plt.plot(rmse_vec, marker='o', linestyle='-', color='b')  # Plotting the line chart
-    plt.axhline(y=thres, color='r', linestyle='-') # threshold
-    plt.title(f'LSTM RMSE (Threshold: {thres})')  # Title of the chart
-    plt.xlabel('Seq Index')  # X-axis label
-    plt.ylabel('RMSE')  # Y-axis label
-    plt.grid(True)  # Adding a grid
-    plt.savefig("validation.png")  # Display the plot
+
+    # Update these lines to use the new CPU variables
+    plt.plot(rmse_plot, marker='o', linestyle='-', color='b')
+    plt.axhline(y=thres_plot, color='r', linestyle='-')
+
+    plt.title(f'LSTM RMSE (Threshold: {thres_plot:.4f})')
+    plt.xlabel('Seq Index')
+    plt.ylabel('RMSE')
+    plt.grid(True)
+    plt.savefig("validation.png")
 
 # normer = Normalizer(train_feat.shape[-1],online_minmax=True)
 # train_feat = normer.fit_transform(train_feat)

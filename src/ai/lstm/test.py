@@ -16,16 +16,17 @@ from sklearn.metrics import roc_curve, auc
 # train data
 train_dataset = "5g-mobiwatch"
 train_label = "benign"
-delimeter = ";"
 
-model_dict = torch.load(f'save/lstm_multivariate_{train_dataset}_{train_label}.pth.tar')
+
+model_dict = torch.load(f'save/lstm_multivariate_{train_dataset}_{train_label}.pth.tar', weights_only=False)
 model = model_dict['net']
-thres = model_dict['thres']
+thres = model_dict['thres'].detach().cpu()
 print(thres)
 
 # test data
 test_dataset = "5g-mobiwatch"
 test_label = "abnormal"
+delimeter = ";"
 
 if __name__ == "__main__":
     print(test_dataset, test_label)
@@ -35,7 +36,7 @@ if __name__ == "__main__":
     # Handle missing values
     df.fillna(0, inplace=True)
 
-    sequence_length = 5
+    sequence_length = 10
     encoder = Encoder()
 
     X_sequences = encoder.encode_mobiflow(df, sequence_length+1)
@@ -52,6 +53,19 @@ if __name__ == "__main__":
     y_test = np.asarray(y_test)
     print(x_test.shape)
     print(y_test.shape)
+    # ======================
+    # Load and Apply Normalization added from 56 to 67
+    # ======================
+    import pickle
+    normer = pickle.load(open("save/normer.pkl", "rb"))
+
+    # Normalize test sequences
+    x_test_reshaped = x_test.reshape(-1, x_test.shape[-1])
+    x_test_reshaped = normer.transform(x_test_reshaped)
+    x_test = x_test_reshaped.reshape(x_test.shape)
+
+    # Normalize targets
+    y_test = normer.transform(y_test)
 
     # id_column_idx = [1, 2]
     # for x in X_test:
@@ -81,12 +95,13 @@ if __name__ == "__main__":
 
     # Inference
     rmse_vec = test(model, thres, x_test, y_test)
+    rmse_vec = rmse_vec.detach().cpu()
 
     # Convert back to DataFrame
-    anomalies = torch.tensor(rmse_vec > thres)
-    if len(anomalies) > 0:
-        for anomalies_idx in torch.nonzero(anomalies).squeeze():
-            df_idx = anomalies_idx
+    anomalies = (rmse_vec > thres).detach().cpu()
+    if anomalies.sum() > 0:
+        for anomalies_idx in torch.nonzero(anomalies).flatten():
+            df_idx = anomalies_idx.item()
             sequence_data = df.loc[df_idx:df_idx + sequence_length]
             df_sequence = pd.DataFrame(sequence_data, columns=encoder.identifier_features + encoder.numerical_features + encoder.categorical_features)
             print(df_sequence)
@@ -119,7 +134,7 @@ if __name__ == "__main__":
     fp = []
 
     # Convert back to DataFrame
-    for anomalies_idx in torch.nonzero(anomalies).squeeze():
+    for anomalies_idx in torch.nonzero(anomalies).flatten().cpu().numpy():
         df_idx = anomalies_idx
         sequence_data = df.loc[df_idx:df_idx + sequence_length]
         df_sequence = pd.DataFrame(sequence_data, columns=encoder.identifier_features + encoder.numerical_features + encoder.categorical_features)
@@ -149,21 +164,51 @@ if __name__ == "__main__":
     print("FP:")
     print(fp)
 
-    POS = len([v for k in gt.keys() for v in gt[k]])
-    NEG = x_test.shape[0] - POS
-    FP = len(fp)
-    FN = len(fn)
-    TP = POS - FP
-    TN = NEG - FN
-    # Compute precision, recall and F1-measure
+    # ==========================
+    # Proper Window-Level Metrics
+    # ==========================
+
+    pred_labels = anomalies.numpy().astype(int)
+    true_labels = np.zeros(len(pred_labels))
+
+    # for attack in gt.values():
+    #     for idx in attack:
+    #         if idx < len(true_labels):
+    #             true_labels[idx] = 1
+
+    # Flatten all attack indices
+    all_attack_indices = []
+    for attack_list in gt.values():
+        all_attack_indices.extend(attack_list)
+
+    # Label window as anomalous if ANY attack index falls inside it
+    for window_idx in range(len(true_labels)):
+        for attack_idx in all_attack_indices:
+            if window_idx <= attack_idx <= window_idx + sequence_length:
+                true_labels[window_idx] = 1
+                break
+    # for window_idx in range(len(true_labels)):
+    #     for attack_idx in gt:
+    #         if window_idx < attack_idx < window_idx + sequence_length:
+    #             true_labels[window_idx] = 1
+
+    TP = ((pred_labels == 1) & (true_labels == 1)).sum()
+    TN = ((pred_labels == 0) & (true_labels == 0)).sum()
+    FP = ((pred_labels == 1) & (true_labels == 0)).sum()
+    FN = ((pred_labels == 0) & (true_labels == 1)).sum()
+
     acc = 100 * (TP + TN) / (TP + TN + FP + FN)
-    P = 100 * TP / (TP + FP)
-    R = 100 * TP / (TP + FN)
-    F1 = 2 * P * R / (P + R)
-    fpr = 100 * FP / (FP + TN)
-    tpr = 100 * TP / (TP + FN)
-    print('false positive (FP): {}, false negative (FN): {}, Acc: {:.3f}%, Precision: {:.3f}%, Recall: {:.3f}%, F1-measure: {:.3f}%'.format(FP, FN, acc, P, R, F1))
-    print('false positive rate: {:.3f}%, true positive rate: {:.3f}%'.format(fpr, tpr))
+    precision = 100 * TP / (TP + FP) if (TP + FP) > 0 else 0
+    recall = 100 * TP / (TP + FN) if (TP + FN) > 0 else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    fpr = 100 * FP / (FP + TN) if (FP + TN) > 0 else 0
+
+    print(f"TP: {TP}, TN: {TN}, FP: {FP}, FN: {FN}")
+    print(f"Accuracy: {acc:.3f}%")
+    print(f"Precision: {precision:.3f}%")
+    print(f"Recall: {recall:.3f}%")
+    print(f"F1-score: {f1:.3f}%")
+    print(f"False Positive Rate: {fpr:.3f}%")
 
     # plot_name = "test_plot_%s_%s_%s" % (test_dataset, test_label, test_ver)
     # test_plot(test_feat, rmse_vec, thres, plot_name)

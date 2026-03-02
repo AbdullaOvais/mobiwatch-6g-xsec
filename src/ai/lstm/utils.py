@@ -34,8 +34,8 @@ class Normalizer:
         self.normer = normer
         if self.normer == 'minmax':
             self.online_minmax = online_minmax
-            self.norm_max = [-np.Inf] * self.dim
-            self.norm_min = [np.Inf] * self.dim
+            self.norm_max = [-np.inf] * self.dim
+            self.norm_min = [np.inf] * self.dim
         else:
             raise NotImplementedError # Implement other Normalizer here
         

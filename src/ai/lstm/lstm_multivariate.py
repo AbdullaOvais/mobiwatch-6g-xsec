@@ -12,13 +12,13 @@ def se2rmse(a):
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # hyper params
 feature_size = None # will be set based on the input data
-hidden_len = 64
+hidden_len = 128
 batch_size = 256
-num_layer = 1
+num_layer = 2
 lr = 1e-3
 weight_decay = 1e-5
 epoches = 500
-seq_len = 5
+seq_len = 10
 
 class LSTM_multivariate(nn.Module):
     def __init__(self):
@@ -95,11 +95,11 @@ def train(X_train, y_train):
 
     with torch.no_grad():
         mse_vec = torch.mean((output - y_train) ** 2, dim=1)
-        mse_vec_unsort = mse_vec.numpy()
+        mse_vec_unsort = mse_vec.detach().cpu().numpy()
     print("max AD score",max(mse_vec))
     thres = max(mse_vec)
     mse_vec.sort()
-    pctg = 0.99
+    pctg = 0.97
     thres = mse_vec[int(len(mse_vec)*pctg)] + 0.001 # hack
     print("thres:",thres)
     return model, thres, mse_vec_unsort
