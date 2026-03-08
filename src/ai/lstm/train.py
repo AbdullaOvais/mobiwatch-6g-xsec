@@ -51,7 +51,7 @@ y_train = normer.transform(y_train)
 
 pickle.dump(normer, open("save/normer.pkl", "wb"))
 
-seed = 2
+seed = 42
 val_portion = 0.1 # size of validation set
 indices = np.arange(x_train.shape[0])
 x_train, x_val, indices_train, indices_val = train_test_split(x_train, indices, test_size=val_portion, random_state=seed)

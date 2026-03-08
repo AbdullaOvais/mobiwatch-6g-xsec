@@ -25,7 +25,7 @@ print(thres)
 
 # test data
 test_dataset = "5g-mobiwatch"
-test_label = "abnormal"
+test_label = "benign"
 delimeter = ";"
 
 if __name__ == "__main__":
@@ -120,49 +120,65 @@ if __name__ == "__main__":
         plt.grid(True)  # Adding a grid
         plt.savefig("test.png")  # Display the plot
 
-    # ground truth
-    gt = {"blind dos": [10, 21, 32], 
-        "downlink dos": [38],
-        "downlink imsi extr": [102],
-        "uplink imsi extr": list(range(42, 47)),
-        "uplink dos": [71, 72],
-        "bts ddos": list(range(52, 64))+list(range(88, 97))+list(range(107, 125)),
-        "null cipher": list(range(82, 84))
-        }
+    # # ground truth comment for benign evaluation from 123 to 165
+    # gt = {"blind dos": [10, 21, 32], 
+    #     "downlink dos": [38],
+    #     "downlink imsi extr": [102],
+    #     "uplink imsi extr": list(range(42, 47)),
+    #     "uplink dos": [71, 72],
+    #     "bts ddos": list(range(52, 64))+list(range(88, 97))+list(range(107, 125)),
+    #     "null cipher": list(range(82, 84))
+    #     }
 
-    fn = [v for k in gt.keys() for v in gt[k]]
-    fp = []
+    # fn = [v for k in gt.keys() for v in gt[k]]
+    # fp = []
 
-    # Convert back to DataFrame
-    for anomalies_idx in torch.nonzero(anomalies).flatten().cpu().numpy():
-        df_idx = anomalies_idx
-        sequence_data = df.loc[df_idx:df_idx + sequence_length]
-        df_sequence = pd.DataFrame(sequence_data, columns=encoder.identifier_features + encoder.numerical_features + encoder.categorical_features)
-        print(df_sequence)
+    # # Convert back to DataFrame
+    # for anomalies_idx in torch.nonzero(anomalies).flatten().cpu().numpy():
+    #     df_idx = anomalies_idx
+    #     sequence_data = df.loc[df_idx:df_idx + sequence_length]
+    #     df_sequence = pd.DataFrame(sequence_data, columns=encoder.identifier_features + encoder.numerical_features + encoder.categorical_features)
+    #     print(df_sequence)
 
-        # evaluation with ground truth
-        attack_found = False
-        for attack in gt.keys():
-            for attack_idx in gt[attack]:
-                if anomalies_idx <= attack_idx <= anomalies_idx + sequence_length:
-                    attack_found = True
-                    if attack_idx in fn:
-                        fn.remove(attack_idx) 
-            if attack_found:
-                break
+    #     # evaluation with ground truth
+    #     attack_found = False
+    #     for attack in gt.keys():
+    #         for attack_idx in gt[attack]:
+    #             if anomalies_idx <= attack_idx <= anomalies_idx + sequence_length:
+    #                 attack_found = True
+    #                 if attack_idx in fn:
+    #                     fn.remove(attack_idx) 
+    #         if attack_found:
+    #             break
         
-        if attack_found:
-            print(f"Attack: {attack}")
-        else:
-            print(f"False Positive")
-            fp.append(anomalies_idx)
+    #     if attack_found:
+    #         print(f"Attack: {attack}")
+    #     else:
+    #         print(f"False Positive")
+    #         fp.append(anomalies_idx)
 
-        print()
+    #     print()
 
-    print("FN:")
-    print(fn)
-    print("FP:")
-    print(fp)
+    # print("FN:")
+    # print(fn)
+    # print("FP:")
+    # print(fp)
+    
+    # ==========================
+    # comment for abnormlal evaluation from 170 to 181
+    # ==========================
+    pred_labels = (rmse_vec > thres).numpy().astype(int)
+
+    FP = pred_labels.sum()
+    TN = len(pred_labels) - FP
+
+    accuracy = 100 * TN / len(pred_labels)
+    precision = accuracy  # same as accuracy for benign
+
+    print(f"Total Windows: {len(pred_labels)}")
+    print(f"False Positives: {FP}")
+    print(f"Accuracy: {accuracy:.3f}%")
+    print(f"Precision: {precision:.3f}%")
 
     # ==========================
     # Proper Window-Level Metrics
@@ -177,38 +193,38 @@ if __name__ == "__main__":
     #             true_labels[idx] = 1
 
     # Flatten all attack indices
-    all_attack_indices = []
-    for attack_list in gt.values():
-        all_attack_indices.extend(attack_list)
+    # all_attack_indices = []
+    # for attack_list in gt.values():
+    #     all_attack_indices.extend(attack_list)
 
-    # Label window as anomalous if ANY attack index falls inside it
-    for window_idx in range(len(true_labels)):
-        for attack_idx in all_attack_indices:
-            if window_idx <= attack_idx <= window_idx + sequence_length:
-                true_labels[window_idx] = 1
-                break
+    # # # Label window as anomalous if ANY attack index falls inside it
+    # for window_idx in range(len(true_labels)):
+    #     for attack_idx in all_attack_indices:
+    #         if window_idx <= attack_idx <= window_idx + sequence_length:
+    #             true_labels[window_idx] = 1
+    #             break #linne 197 to 206 comment for beningn evaluation
     # for window_idx in range(len(true_labels)):
     #     for attack_idx in gt:
     #         if window_idx < attack_idx < window_idx + sequence_length:
     #             true_labels[window_idx] = 1
 
-    TP = ((pred_labels == 1) & (true_labels == 1)).sum()
-    TN = ((pred_labels == 0) & (true_labels == 0)).sum()
-    FP = ((pred_labels == 1) & (true_labels == 0)).sum()
-    FN = ((pred_labels == 0) & (true_labels == 1)).sum()
+    # TP = ((pred_labels == 1) & (true_labels == 1)).sum() # for benign 212 to 228 comment
+    # TN = ((pred_labels == 0) & (true_labels == 0)).sum()
+    # FP = ((pred_labels == 1) & (true_labels == 0)).sum()
+    # FN = ((pred_labels == 0) & (true_labels == 1)).sum()
 
-    acc = 100 * (TP + TN) / (TP + TN + FP + FN)
-    precision = 100 * TP / (TP + FP) if (TP + FP) > 0 else 0
-    recall = 100 * TP / (TP + FN) if (TP + FN) > 0 else 0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-    fpr = 100 * FP / (FP + TN) if (FP + TN) > 0 else 0
+    # acc = 100 * (TP + TN) / (TP + TN + FP + FN)
+    # precision = 100 * TP / (TP + FP) if (TP + FP) > 0 else 0
+    # recall = 100 * TP / (TP + FN) if (TP + FN) > 0 else 0
+    # f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    # fpr = 100 * FP / (FP + TN) if (FP + TN) > 0 else 0
 
-    print(f"TP: {TP}, TN: {TN}, FP: {FP}, FN: {FN}")
-    print(f"Accuracy: {acc:.3f}%")
-    print(f"Precision: {precision:.3f}%")
-    print(f"Recall: {recall:.3f}%")
-    print(f"F1-score: {f1:.3f}%")
-    print(f"False Positive Rate: {fpr:.3f}%")
+    # print(f"TP: {TP}, TN: {TN}, FP: {FP}, FN: {FN}")
+    # print(f"Accuracy: {acc:.3f}%")
+    # print(f"Precision: {precision:.3f}%")
+    # print(f"Recall: {recall:.3f}%")
+    # print(f"F1-score: {f1:.3f}%")
+    # print(f"False Positive Rate: {fpr:.3f}%")
 
     # plot_name = "test_plot_%s_%s_%s" % (test_dataset, test_label, test_ver)
     # test_plot(test_feat, rmse_vec, thres, plot_name)
