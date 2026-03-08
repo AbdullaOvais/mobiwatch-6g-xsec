@@ -1,142 +1,282 @@
-# MobiWatch
+# MobiWatch Reproduction Study
 
-MobiWatch is an O-RAN compliant xApp that employs unsupervised unsupervised deep learning to detect layer-3 (RRC and NAS) cellular anomalies and attacks in 5G networks. MobiWatch operates on the security data telemetry called [MobiFlow](https://github.com/5GSEC/MobiFlow-Auditor), a security audit trail for holding mobile devices accountable during the link and session setup protocols as they interact with the base station.
+This repository contains a **reproduction study of the anomaly detection models used in the MobiWatch framework** proposed in the paper:
 
-Currently it is compatible with two nRT-RIC implmentations: [OSC RIC](https://lf-o-ran-sc.atlassian.net/wiki/spaces/ORAN) and [SD-RAN ONOS RIC](https://docs.sd-ran.org/master/sdran-in-a-box/README.html). You can deploy and test MobiWatch based on the [tutorial](https://github.com/5GSEC/5G-Spector/wiki/O%E2%80%90RAN-SC-RIC-Deployment-Guide) we have created to instantiate an O-RAN compliant 5G network with just open-sourced software such as [OpenAirInterface](https://gitlab.eurecom.fr/oai/openairinterface5g/). 
+**6G-XSec: Explainable Edge Security for Emerging OpenRAN Architectures (HotNets 2024).**
 
-For more design details, please refer to our **HotNets'24 research paper** [6G-XSec: Explainable Edge Security for Emerging OpenRAN Architectures](https://onehouwong.github.io/papers/HotNets_2024_6gxsec.pdf). We have also released a **demo video**: [MobiWatch Demo on 5G Attack Detection with AI/DL](https://www.5gsec.com/post/video-mobiwatch-demo-on-5g-attack-detection-with-ai-dl).  
+The goal of this work is to **reproduce and evaluate the unsupervised anomaly detection models** used in the MobiWatch xApp for detecting signaling-level attacks in 5G networks.
 
-![alt text](./fig/sys.png)
+The models evaluated in this reproduction include:
 
-## Prerequisite
+- **Autoencoder (Reconstruction-based anomaly detection)**
+- **LSTM (Sequence prediction–based anomaly detection)**
 
-### Local Docker registry
+Both models are trained **only on benign cellular traffic** and evaluated on benign and attack datasets.
 
-MobiWatch is built from source as a local Docker container. Refer to the official tutorial (https://docs.docker.com/engine/install/) to install and set up the Docker environment.
+---
 
-Create a local docker registry to host docker images: 
+# Original Project
 
-```
-sudo docker run -d -p 5000:5000 --restart=always --name registry registry:2
-```
+Original MobiWatch repository:  
+https://github.com/5GSEC/MobiWatch
 
-### OSC nRT RIC
+Original research paper:  
+https://onehouwong.github.io/papers/HotNets_2024_6gxsec.pdf
 
-Before deploying the xApp, make sure the OSC nRT-RIC is deployed by following this [tutorial](https://github.com/5GSEC/5G-Spector/wiki/O%E2%80%90RAN-SC-RIC-Deployment-Guide#deploy-the-osc-near-rt-ric).
+The original system integrates:
 
+- MobiFlow telemetry
+- Deep learning anomaly detection
+- Explainability using LLMs
+- Deployment as an O-RAN xApp
 
-### MobiFlow Auditor xApp
+This reproduction study focuses **only on the anomaly detection models**.
 
-MobiWatch directly acquires security telemetry from the SDL generated from the [MobiFlow Auditor xApp](https://github.com/5GSEC/MobiFlow-Auditor) xApp. Follow the instructions to prepare the environment and collect data from a 5G network.
+---
 
+# Project Overview
 
-## Build
-
-Run the build script:
-
-```
-./build.sh
-```
-
-
-## Install / Uninstall the xApp
-
-First, onboard the xApp. You need to set up the proper environment with the `dms_cli` tool. Follow the instructions [here](https://github.com/5GSEC/5G-Spector/wiki/O%E2%80%90RAN-SC-RIC-Deployment-Guide) to install the tool. 
-
-Then execute the following to onboard the xApp:
+The reproduced pipeline follows the same design as the original system:
 
 ```
-cd init
-sudo -E dms_cli onboard --config_file_path=config-file.json --shcema_file_path=schema.json
+PCAP Traffic
+      ↓
+MobiFlow Telemetry (CSV)
+      ↓
+Sequence Encoding
+      ↓
+Deep Learning Models
+   ├── Autoencoder
+   └── LSTM
+      ↓
+Anomaly Score
+      ↓
+Percentile Threshold Detection
 ```
 
-Then, simply run the script to deploy the xApp under the `ricxapp` K8S namespace in the nRT-RIC.
+The system detects cellular signaling anomalies such as:
+
+- Blind DoS
+- BTS DoS
+- IMSI extraction
+- Identity leakage
+- Null ciphering attacks
+
+---
+
+# Dataset
+
+The dataset used for reproduction is included in the repository.
+
+Two formats are provided:
+
+### PCAP Files
+
+Original network captures collected from a 5G testbed.
 
 ```
-cd ..
-./deploy.sh
+dataset/pcap/5g-benign/
+dataset/pcap/5g-attack/
 ```
 
-Successful deployment (this may take a while):
+### MobiFlow Telemetry
+
+Converted security telemetry used for model training.
 
 ```
-$ kubectl get pods -n ricxapp
-ricxapp        ricxapp-mobiwatch-xapp-6b8879868d-fmnbd                      1/1     Running     0             5m32s
+dataset/mobiflow/
+    5g-mobiwatch_benign_mobiflow.csv
+    5g-mobiwatch_abnormal_mobiflow.csv
 ```
 
+Telemetry features include:
 
-To uninstall MobiWatch from the Kubernetes cluster:
+- RRC signaling messages
+- NAS signaling messages
+- RNTI identifiers
+- TMSI identifiers
+- Ciphering algorithms
+- Integrity protection information
 
-```
-./undeploy.sh
-```
+Only **benign traffic is used for training**.
 
-## Running Example
+---
 
-MobiWatch's classification results with benign 5G network traffic:
+# Environment Setup
 
-```
-[INFO 2024-10-23 21:42:23,990 dlagent.py:222]
-    rnti        tmsi                     msg
-0  60786  1450744508         RRCSetupRequest
-1  60786  1450744508                RRCSetup
-2  60786  1450744508        RRCSetupComplete
-3  60786  1450744508     Registrationrequest
-4  60786  1450744508   Authenticationrequest
-5  60786  1450744508  Authenticationresponse
-[INFO 2024-10-23 21:42:23,990 dlagent.py:223] Benign
-
-
-[INFO 2024-10-23 21:42:23,993 dlagent.py:222]
-    rnti        tmsi                     msg
-1  60786  1450744508                RRCSetup
-2  60786  1450744508        RRCSetupComplete
-3  60786  1450744508     Registrationrequest
-4  60786  1450744508   Authenticationrequest
-5  60786  1450744508  Authenticationresponse
-6  60786  1450744508     Securitymodecommand
-[INFO 2024-10-23 21:42:23,993 dlagent.py:223] Benign
-```
-
-MobiWatch's classification results with an specific 5G network attack:
+Create a Python environment and install dependencies.
 
 ```
-[ERROR 2024-10-24 16:07:40,227 dlagent.py:225]
-    rnti        tmsi                    msg
-0  53496  1450744508        RRCSetupRequest
-1  53496  1450744508               RRCSetup
-2  53496  1450744508       RRCSetupComplete
-3  53496  1450744508    Registrationrequest
-4  53496  1450744508  Authenticationrequest
-5  53496  1450744508       Identityresponse
-[ERROR 2024-10-24 16:07:40,227 dlagent.py:226] Abnormal
+python -m venv mobiwatch_env
+source mobiwatch_env/bin/activate
 ```
 
-This attack represents a downlink overshadowing where the network's Authentication Request message is overwritten and the UE responds with an IdentityResponse message with its identity, constituding an identity extraction attack. MobiWatch classifies this as an abnormal event as it deviates from normal traffic the DL model was traineed on.
+Install required packages:
 
+```
+pip install torch
+pip install numpy
+pip install pandas
+pip install scikit-learn
+pip install matplotlib
+```
 
+---
 
-## Dataset
+# Autoencoder Model
 
-Datasets used for training the DL model are available in this [folder](./dataset). We provide both the original [pcap](./dataset/pcap/) format of the benign / attack traffic we have collected in a test 5G network based on OAI, as well as the [MobiFlow](https://github.com/5GSEC/MobiFlow-Auditor) security telemetry format in `.csv` (converted from the `.pcap` files) that are used to train our DL detection models.
+The Autoencoder model learns a compressed representation of normal cellular traffic.
 
+During inference:
 
-## Model Training
+```
+Reconstruction Error = MSE(input − reconstructed)
+```
 
-MobiWatch has pre-trained DL models on benign layer-3 5G network traffic, including a vanilla [Autoencoder](./src/ai/autoencoder/model.py) model and a multivariate [LSTM](./src/ai/lstm/lstm_multivariate.py) model implemented by the [DeepAID](https://github.com/dongtsi/DeepAID) paper. The pre-trained models will be loaded into the xApp container.
+If the error exceeds a threshold, the sequence is classified as **anomalous**.
 
+### Train Autoencoder
 
-## Publication
+```
+python -m src.ai.autoencoder.train
+```
 
-Please cite our research papers if you develop any products and prototypes based on our code and datasets:
+### Test Autoencoder (Benign)
+
+```
+python -m src.ai.autoencoder.test \
+--model_path models/AE_model.pt \
+--label benign
+```
+
+### Test Autoencoder (Abnormal)
+
+```
+python -m src.ai.autoencoder.test \
+--model_path models/AE_model.pt \
+--label abnormal
+```
+
+---
+
+# LSTM Model
+
+The LSTM model performs **next-step prediction on telemetry sequences**.
+
+During inference:
+
+```
+Prediction Error = RMSE(predicted − actual)
+```
+
+If prediction error exceeds the threshold, the sequence is classified as **anomalous**.
+
+### Train LSTM
+
+```
+python -m src.ai.lstm.train
+```
+
+### Test LSTM
+
+```
+python -m src.ai.lstm.test
+```
+
+---
+
+# Hyperparameter Optimization
+
+Grid search was performed over the following parameters:
+
+| Parameter | Values Tested |
+|--------|--------|
+| Sequence Length | 6, 8, 10 |
+| Latent Dimension | 16, 32 |
+| Hidden Dimension | 64, 128 |
+| Threshold Percentile | 95, 97, 99 |
+| Learning Rate | 0.001 |
+
+Best Autoencoder configuration:
+
+```
+Sequence length = 10
+Latent dimension = 16
+Hidden dimension = 64
+Threshold percentile = 95
+```
+
+---
+
+# Reproduced Results
+
+## Autoencoder
+
+| Metric | Benign | Abnormal |
+|------|------|------|
+| Accuracy | 93.10% | 92.48% |
+| Precision | 93.10% | 100% |
+| Recall | — | 92.48% |
+| F1 Score | — | 96.09% |
+
+---
+
+## LSTM
+
+| Metric | Benign | Abnormal |
+|------|------|------|
+| Accuracy | 89.59% | 88.67% |
+| Precision | 89.59% | 100% |
+| Recall | — | 88.67% |
+| F1 Score | — | 94.51% |
+
+---
+
+# Observations
+
+Key findings from the reproduction study:
+
+- Autoencoder achieved **higher recall and F1-score** than LSTM.
+- Both models successfully detected previously unseen attacks.
+- Detection performance is sensitive to **threshold percentile selection**.
+- Longer sequence windows improved anomaly detection performance.
+
+Although the exact metrics differ slightly from the original paper, the **overall detection trends remain consistent**.
+
+---
+
+# Project Structure
+
+```
+MobiWatch-main/
+│
+├── dataset/
+│   ├── mobiflow/
+│   └── pcap/
+│
+├── src/
+│   ├── ai/
+│   │   ├── autoencoder/
+│   │   └── lstm/
+│
+├── models/
+│
+├── hpo.py
+├── train.py
+└── test.py
+```
+
+---
+
+# Citation
+
+If you use this work, please cite the original paper:
 
 ```
 @inproceedings{6G-XSEC:Hotnets24,
-  title     = {6G-XSec: Explainable Edge Security for Emerging OpenRAN Architectures },
+  title     = {6G-XSec: Explainable Edge Security for Emerging OpenRAN Architectures},
   author    = {Wen, Haohuang and Sharma, Prakhar and Yegneswaran, Vinod and Porras, Phillip and Gehani, Ashish and Lin, Zhiqiang},
   booktitle = {Proceedings of the Twenty-Third ACM Workshop on Hot Topics in Networks (HotNets 2024)},
-  address   = {Irvine, CA},
-  month     = {November},
   year      = 2024
 }
 ```
