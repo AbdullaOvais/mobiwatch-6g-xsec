@@ -12,6 +12,11 @@ mobiwatch_env/
 venv/
 env/
 .venv/
+llm_env/
+
+# Generated outputs
+detected_anomalies.csv
+llm_explanations.txt
 
 # =========================
 # PyTorch / Model Files
