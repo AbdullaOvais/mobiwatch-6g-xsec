@@ -120,7 +120,7 @@ if __name__ == "__main__":
         plt.grid(True)  # Adding a grid
         plt.savefig("test.png")  # Display the plot
 
-    # # ground truth comment for benign evaluation from 123 to 165
+    # # This is I'm comminting for beningn evaluaton from 123 to 165
     # gt = {"blind dos": [10, 21, 32], 
     #     "downlink dos": [38],
     #     "downlink imsi extr": [102],
@@ -134,7 +134,7 @@ if __name__ == "__main__":
     # fp = []
 
     # # Convert back to DataFrame
-    # for anomalies_idx in torch.nonzero(anomalies).flatten().cpu().numpy():
+    # for anomalies_idx in torch.nonzero(anomalies).flatten().cpu().numpy(): 
     #     df_idx = anomalies_idx
     #     sequence_data = df.loc[df_idx:df_idx + sequence_length]
     #     df_sequence = pd.DataFrame(sequence_data, columns=encoder.identifier_features + encoder.numerical_features + encoder.categorical_features)
